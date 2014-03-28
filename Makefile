@@ -10,11 +10,16 @@ REFERENCE_SOURCES := reference.c
 THREADED_OBJECTS := threaded.o
 THREADED_SOURCES := threaded.c
 
+PARALLEL_OBJECTS := parallel.o
+PARALLEL_SOURCES := parallel.c
+
+MPICC := mpicc
+
 CFLAGS := -std=c99 -pedantic -Wall -Wextra -Werror
 CFLAGS += -O3 -fomit-frame-pointer
 CFLAGS += -fopenmp
 
-TARGETS := datagen reference threaded ddiff
+TARGETS := datagen reference threaded ddiff parallel
 
 all: $(TARGETS)
 
@@ -29,6 +34,9 @@ threaded: $(THREADED_OBJECTS)
 
 ddiff: $(DDIFF_OBJECTS)
 	$(CC) $< -o $@
+
+parallel: $(PARALLEL_OBJECTS)
+	$(MPICC) $< -o $@ -fopenmp
 
 clean:
 	rm *.o $(TARGETS)
