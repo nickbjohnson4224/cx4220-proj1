@@ -22,20 +22,20 @@ int main(int argc, char **argv) {
 	FILE *itensor_file = fopen(itensor_path, "wb");
 
 	if (!dtensor_file) {
-		fprintf(stderr, "error: %s:", dtensor_path);
+		fprintf(stderr, "error: %s: ", dtensor_path);
 		perror(NULL);
 		return 1;
 	}
 
 	if  (!itensor_file) {
-		fprintf(stderr, "error: %s:", itensor_path);
+		fprintf(stderr, "error: %s: ", itensor_path);
 		perror(NULL);
 		return 1;
 	}
 
 	for (int i = 0; i < n * n; i++) {
 		double v = random();
-		if (fwrite(&v, sizeof(double), 1, dtensor_file) < sizeof(double)) {
+		if (fwrite(&v, sizeof(double), 1, dtensor_file) < 1) {
 			fprintf(stderr, "error: writing to dtensor: ");
 			perror(NULL);
 			return 1;
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
 
 	for (int i = 0; i < n * n * n * 4; i++) {
 		double v = random();
-		if (fwrite(&v, sizeof(double), 1, itensor_file) < sizeof(double)) {
+		if (fwrite(&v, sizeof(double), 1, itensor_file) < 1) {
 			fprintf(stderr, "error: writing to itensor: ");
 			perror(NULL);
 			return 1;

@@ -9,12 +9,14 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-static void compute(double *K, const double *D, const double *I, int n, int m);
+#include <omp.h>
+
+static void compute_threaded(double *K, const double *D, const double *I, int n, int m);
 
 int main(int argc, char **argv) {
 
 	if (argc != 6) {
-		fprintf(stderr, "Usage: reference N M DTENSOR ITENSOR KTENSOR\n");
+		fprintf(stderr, "Usage: threaded N M DTENSOR ITENSOR KTENSOR\n");
 		return 1;
 	}
 
@@ -80,7 +82,7 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	compute(ktensor, dtensor, itensor, n, m);
+	compute_threaded(ktensor, dtensor, itensor, n, m);
 
 	munmap(dtensor, n * n * sizeof(double));
 	munmap(itensor, m * n * n * sizeof(double));
@@ -93,38 +95,72 @@ int main(int argc, char **argv) {
 	return 0;
 }
 
-static void compute(double *K, const double *D, const double *I, int n, int m) {
-
-	// T_ilA = D_kl I_ikA ; T[A][i][l] = D[l][k] * I[A][i][k]
+static void compute_threaded(double *K, const double *D, const double *I, int n, int m) {
 	double *T = malloc(m * n * n * sizeof(double));
-	for (int A = 0; A < m; A++) {
+	double *S;
+	int s;
+
+	#pragma omp parallel shared(S, s)
+	{
+		int r = omp_get_thread_num();
+		s = omp_get_num_threads();
+
+		#pragma omp master
+		{
+			S = malloc(s * n * n * sizeof(double));
+		}
+		#pragma omp barrier
+
+		// initialize S
 		for (int i = 0; i < n; i++) {
-			for (int l = 0; l < n; l++) {
-				double sum = 0;
-				for (int k = 0; k < n; k++) {
-					// sum += D_kl * I_ikA ; sum += D[l][k] * I[A][i][k]
-					sum += D[l*n + k] * I[A*n*n + i*n + k];
-				}
-				// T_ilA = sum ; T[A][i][l] = sum
-				T[A*n*n + i*n + l] = sum;
+			for (int j = 0; j < n; j++) {
+				S[r*n*n + i*n + j] = 0.0;
 			}
 		}
-	}
 
-	// K_ij = T_ilA I_jlA ; K[i][j] = T[A][i][l] * I[A][j][l]
+		#pragma omp for schedule(static)
+		for (int A = 0; A < m; A++) {
+	
+			// T_ilA = D_kl I_ikA ; T[A][i][l] = D[l][k] * I[A][i][k]
+			for (int i = 0; i < n; i++) {
+				for (int l = 0; l < n; l++) {
+					double sum = 0;
+					for (int k = 0; k < n; k++) {
+						// sum += D_kl * I_ikA ; sum += D[l][k] * I[A][i][k]
+						sum += D[l*n + k] * I[A*n*n + i*n + k];
+					}
+					// T_ilA = sum ; T[A][i][l] = sum
+					T[A*n*n + i*n + l] = sum;
+				}
+			}
+
+			// S_ijr = T_ilA I_jlA ; K[i][j] = T[A][i][l] * I[A][j][l]
+			for (int i = 0; i < n; i++) {
+				for (int j = 0; j < n; j++) {
+					for (int l = 0; l < n; l++) {
+						S[r*n*n + i*n + j] += T[A*n*n + i*n + l] * I[A*n*n + j*n + l];
+					}
+				}
+			}
+		}
+
+		#pragma omp barrier
+		#pragma omp master
+		{
+			free(T);
+		}
+	}
+	
+	// K_ij = S_ijr
 	for (int i = 0; i < n; i++) {
 		for (int j = 0; j < n; j++) {
 			double sum = 0.0;
-			for (int A = 0; A < m; A++) {
-				for (int l = 0; l < n; l++) {
-					// sum += T_ilA * T_jlA ; sum += T[A][i][l] * I[A][j][l]
-					sum += T[A*n*n + i*n + l] * I[A*n*n + j*n + l];
-				}
+			for (int r = 0; r < s; r++) {
+				sum += S[r*n*n + i*n + j];
 			}
-			// K_ij = sum ; K[i][j] = sum
 			K[i*n + j] = sum;
 		}
 	}
 
-	free(T);
+	free(S);
 }
