@@ -19,7 +19,7 @@ CFLAGS := -std=c99 -pedantic -Wall -Wextra -Werror
 CFLAGS += -O3 -fomit-frame-pointer
 CFLAGS += -fopenmp
 
-TARGETS := datagen reference threaded ddiff parallel
+TARGETS := datagen reference ddiff parallel
 
 all: $(TARGETS)
 
