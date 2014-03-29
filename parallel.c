@@ -37,6 +37,8 @@ int main(int argc, char **argv) {
 
 	int m_local = (rank < size-1) ? m / size : m - (m / size) * rank;
 
+	printf("rank %d: starting\n");
+
 	if (rank == 0) {
 		int dtensor_fd = open(dtensor_path, O_RDONLY);
 		int itensor_fd = open(itensor_path, O_RDONLY);
@@ -115,6 +117,8 @@ int main(int argc, char **argv) {
 }
 
 static void compute_threaded(double *K, const double *D, const double *I, int n, int m) {
+	printf("rank %d: compute_threaded %p %p %p %d %d\n", rank, (void*) K, (void*) D, (void*) I, n, m);
+
 	double *T = malloc(m * n * n * sizeof(double));
 
 	// initialize K
