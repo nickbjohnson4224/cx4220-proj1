@@ -16,12 +16,7 @@
 #include <omp.h>
 #endif
 
-#ifdef USE_MPI
 #include <mpi.h>
-#endif
-
-#ifdef USE_BLAS
-#endif
 
 #ifdef USE_BLAS
 #define TRANSPOSE 't'
@@ -30,12 +25,10 @@ static void dgemm(double *C, double beta, const double *A, int An, int Am, char 
                                           const double *B, int Bn, int Bm, char Btrans);
 #endif
 static double walltime(void);
-static void compute_threaded(double *K, const double *D, const double *I, int n, int m);
+static void compute_threaded(double *K, const double *D, const double *I, size_t n, size_t m);
 
-int rank;
-#ifdef USE_MPI
-int size;
-#endif
+size_t rank;
+size_t size;
 
 int main(int argc, char **argv) {
 
@@ -44,28 +37,27 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	#ifdef USE_MPI
 	MPI_Init(&argc, &argv);
-	MPI_Comm_size(MPI_COMM_WORLD, &size);
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-	#else
-	rank = 0;
-	#endif
+	int _size;
+	int _rank;
+	MPI_Comm_size(MPI_COMM_WORLD, &_size);
+	MPI_Comm_rank(MPI_COMM_WORLD, &_rank);
+	size = _size;
+	rank = _rank;
 
-	int n = atoi(argv[1]);
-	int m = atoi(argv[2]);
+	size_t n = atoi(argv[1]);
+	size_t m = atoi(argv[2]);
 	const char *dtensor_path = argv[3];
 	const char *itensor_path = argv[4];
 	const char *ktensor_path = argv[5];
 
-	#ifdef USE_MPI
-	int m_local = (rank < size-1) ? m / size : m - (m / size) * rank;
-	off_t ioffset = size * (m / size) * rank;
-	#endif
+	size_t m_local = (rank < size-1) ? m / size : m - (m / size) * rank;
+	off_t ioffset = ((m / size) * rank) * n * n * sizeof(double);
 
-	#ifdef USE_MPI
-	printf("rank %d: m_local=%d ioffset=%d\n", rank, m_local, (int) ioffset);
-	#endif
+	char hostname[100];
+	hostname[99] = 0;
+	gethostname(hostname, 99);
+	printf("rank %zd: host=%s m=%zd I-offset=%d\n", rank, hostname, m_local, (int) ioffset);
 
 	int dtensor_fd = open(dtensor_path, O_RDONLY);
 	int itensor_fd = open(itensor_path, O_RDONLY);
@@ -85,13 +77,8 @@ int main(int argc, char **argv) {
 	double *dtensor = mmap(NULL, n * n * sizeof(double), 
 	                       PROT_READ, MAP_PRIVATE | MAP_POPULATE, dtensor_fd, 0);
 	
-	#ifdef USE_MPI
 	double *itensor = mmap(NULL, m_local * n * n * sizeof(double),
 	                       PROT_READ, MAP_PRIVATE | MAP_POPULATE, itensor_fd, ioffset);
-	#else
-	double *itensor = mmap(NULL, m * n * n * sizeof(double),
-                           PROT_READ, MAP_PRIVATE | MAP_POPULATE, itensor_fd, 0);
-	#endif
 
 	if (!dtensor) {
 		fprintf(stderr, "error in mmap on dtensor: ");
@@ -109,6 +96,7 @@ int main(int argc, char **argv) {
 	
 	int ktensor_fd = -1;
 	double *ktensor = NULL;
+	double t1 = 0.0;
 	if (rank == 0) {
 		ktensor_fd = open(ktensor_path, O_CREAT | O_RDWR, 0644);
 		
@@ -133,29 +121,27 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "\n");
 			return 1;
 		}
+
+		t1 = walltime();
 	}
 
-	#ifdef USE_MPI
 	double *stensor = malloc(n * n * sizeof(double));
 	compute_threaded(stensor, dtensor, itensor, n, m_local);
 	MPI_Reduce(stensor, ktensor, n * n, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-	#else
-	compute_threaded(ktensor, dtensor, itensor, n, m);
-	#endif
 
 	munmap(dtensor, n * n * sizeof(double));
-	munmap(itensor, m * n * n * sizeof(double));
+	munmap(itensor, m_local * n * n * sizeof(double));
 	close(dtensor_fd);
 	close(itensor_fd);
 
 	if (rank == 0) {
 		munmap(ktensor, n * n * sizeof(double));
 		close(ktensor_fd);
+
+		printf("time elapsed: %f seconds\n", walltime() - t1);
 	}
 
-	#ifdef USE_MPI
 	MPI_Finalize();
-	#endif
 	return 0;
 }
 
@@ -163,10 +149,11 @@ int main(int argc, char **argv) {
 static void dgemm(double *C, double beta, 
                   const double *A, int An, int Am, char Atrans, 
                   const double *B, int Bn, int Bm, char Btrans) {
+	extern void dgemm_(char*, char*, int*, int*, int*, double*, const double*, 
+	                   int*, const double*, int*, double*, double*, int*);
+
 	int true_An = An;
-	int true_Am = Am;
 	int true_Bn = Bn;
-	int true_Bm = Bm;
 
 	if (Atrans == TRANSPOSE) {
 		int t = Am;
@@ -180,12 +167,6 @@ static void dgemm(double *C, double beta,
 		Bn = t;
 	}
 
-	if (true_Am != true_Bn) {
-		fprintf(stderr, "error: attempt to multiply matrices %dx%d and %dx%d\n", 
-			true_An, true_Am, true_Bn, true_Bm);
-		exit(1);
-	}
-
 	double alpha = 1.0;
 	dgemm_(&Atrans, &Btrans, &An, &Am, &Bm, &alpha, A, &true_An, B, &true_Bn, &beta, C, &An);
 }
@@ -197,19 +178,13 @@ static double walltime(void) {
 	return (double) (tp.tv_sec + tp.tv_usec * 1e-6);
 }
 
-static void compute_threaded(double *K, const double *D, const double *I, int n, int m) {
-	#ifdef USE_MPI
-	printf("rank %d: ", rank);
-	#endif
-	printf("compute_threaded %p %p %p %d %d\n", (void*) K, (void*) D, (void*) I, n, m);
-
-	double tstart = walltime();
+static void compute_threaded(double *K, const double *D, const double *I, size_t n, size_t m) {
 
 	#ifdef USE_OPENMP
 	{
 		// initialize K
-		for (int i = 0; i < n; i++) {
-			for (int j = 0; j < n; j++) {
+		for (size_t i = 0; i < n; i++) {
+			for (size_t j = 0; j < n; j++) {
 				K[i*n + j] = 0.0;
 			}
 		}
@@ -217,22 +192,24 @@ static void compute_threaded(double *K, const double *D, const double *I, int n,
 		#pragma omp parallel shared(K, D, I)
 		{
 			// initialize S matrix
-			double S[n * n];
-			for (int i = 0; i < n; i++) {
-				for (int j = 0; j < n; j++) {
+			double *S = malloc(n * n * sizeof(double));
+			for (size_t i = 0; i < n; i++) {
+				for (size_t j = 0; j < n; j++) {
 					S[i*n + j] = 0.0;
 				}
 			}
 
+			// allocate T vector
+			double *T = malloc(n * sizeof(double));
+
 			#pragma omp for schedule(static)
-			for (int A = 0; A < m; A++) {
-				double T[n];
+			for (size_t A = 0; A < m; A++) {
 
 				// T_ilA = D_kl I_ikA ; T[A][i][l] = D[l][k] * I[A][i][k]
-				for (int i = 0; i < n; i++) {
-					for (int l = 0; l < n; l++) {
+				for (size_t i = 0; i < n; i++) {
+					for (size_t l = 0; l < n; l++) {
 						double sum = 0;
-						for (int k = 0; k < n; k++) {
+						for (size_t k = 0; k < n; k++) {
 							// sum += D_kl * I_ikA ; sum += D[l][k] * I[A][i][k]
 							sum += D[l*n + k] * I[A*n*n + i*n + k];
 						}
@@ -241,9 +218,9 @@ static void compute_threaded(double *K, const double *D, const double *I, int n,
 					}
 
 					// S_ijr = T_ilA I_jlA ; S_r[i][j] = T[A][i][l] * I[A][j][l]
-					for (int j = 0; j < n; j++) {
+					for (size_t j = 0; j < n; j++) {
 						double sum = 0;
-						for (int l = 0; l < n; l++) {
+						for (size_t l = 0; l < n; l++) {
 							sum += T[l] * I[A*n*n + j*n + l];
 						}
 						S[i*n + j] += sum;
@@ -251,31 +228,31 @@ static void compute_threaded(double *K, const double *D, const double *I, int n,
 				}
 			}
 
+			free(T);
+
 			// K_ij = S_ijr
 			#pragma omp critical
-			for (int i = 0; i < n; i++) {
-				for (int j = 0; j < n; j++) {
+			for (size_t i = 0; i < n; i++) {
+				for (size_t j = 0; j < n; j++) {
 					K[i*n + j] += S[i*n + j];
 				}
 			}
+
+			free(S);
 		}
 	}
 	#endif//USE_OPENMP
 
 	#ifdef USE_BLAS
 	{
-		double T[n * n];
+		double *T = malloc(n * n * sizeof(double));
 
-		for (int A = 0; A < m; A++) {
+		for (size_t A = 0; A < m; A++) {
 			dgemm(T, 0.0, &I[A*n*n], n, n, NO_TRANSPOSE, D, n, n, TRANSPOSE);
 			dgemm(K, (A==0) ? 0.0 : 1.0, T, n, n, NO_TRANSPOSE, &I[A*n*n], n, n, TRANSPOSE);
 		}
+
+		free(T);
 	}
 	#endif//USE_BLAS
-
-	double tfinish = walltime();
-	#ifdef USE_MPI
-	printf("rank %d: ", rank);
-	#endif
-	printf("total compute time: %f seconds\n", tfinish - tstart);
 }
