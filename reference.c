@@ -126,5 +126,7 @@ static void compute(double *K, const double *D, const double *I, int n, int m) {
 		}
 	}
 
+	printf("K[0] = %f\n", K[0]);
+
 	free(T);
 }

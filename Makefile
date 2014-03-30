@@ -14,12 +14,13 @@ PARALLEL_OBJECTS := parallel.o
 PARALLEL_SOURCES := parallel.c
 
 MPICC := mpicc
+CC := gcc
 
-CFLAGS := -std=c99 -pedantic -Wall -Wextra -Werror
-CFLAGS += -O3 -fomit-frame-pointer
+CFLAGS := -std=c99 -pedantic -Wall -Wextra
+CFLAGS += -O3 -fomit-frame-pointer -march=native
 CFLAGS += -fopenmp
 
-TARGETS := datagen reference ddiff parallel
+TARGETS := datagen reference ddiff parallel-omp parallel-blas parallel-omp-mpi parallel-blas-mpi
 
 all: $(TARGETS)
 
@@ -35,8 +36,20 @@ threaded: $(THREADED_OBJECTS)
 ddiff: $(DDIFF_OBJECTS)
 	$(CC) $< -o $@
 
-parallel: $(PARALLEL_OBJECTS)
-	$(MPICC) $< -o $@ -fopenmp
+parallel-omp-mpi: $(PARALLEL_SOURCES)
+	$(MPICC) $(CFLAGS) $< -o $@ -DUSE_OPENMP -DUSE_MPI
+
+parallel-blas-mpi: $(PARALLEL_SOURCES)
+	$(MPICC) $(CFLAGS) $< -o $@ -DUSE_BLAS -lopenblas -DUSE_MPI
+
+parallel-omp: $(PARALLEL_SOURCES)
+	$(CC) $(CFLAGS) $< -o $@ -DUSE_OPENMP
+
+parallel-blas: $(PARALLEL_SOURCES)
+	$(CC) $(CFLAGS) $< -o $@ -DUSE_BLAS -lopenblas
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm *.o $(TARGETS)
